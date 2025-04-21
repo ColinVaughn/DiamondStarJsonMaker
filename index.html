@@ -4,15 +4,18 @@
   <meta charset="UTF-8">
   <title>DSC Preset Builder</title>
   <style>
-    body { font-family: sans-serif; margin: 2rem; }
-    form div { margin-bottom: 1rem; }
+    body { font-family: sans-serif; margin: 2rem; max-width: 1200px; }
+    form div, form details { margin-bottom: 1rem; }
     .hidden { display: none; }
+    details { margin-left: 1rem; }
+    label span.optional { font-weight: normal; font-size: 0.9em; color: #666; margin-left: 0.5em; }
+    #searchBox { margin-bottom: 1rem; padding: 0.5rem; width: 100%; font-size: 1rem; }
   </style>
 </head>
 <body>
 
 <h1>DiamondStarCombat Preset Builder</h1>
-
+<input type="text" id="searchBox" placeholder="Search options...">
 <form id="presetForm"></form>
 
 <button id="downloadBtn" type="button">Download JSON</button>
@@ -20,75 +23,100 @@
 <pre id="jsonPreview"></pre>
 
 <script>
-  // Schema with conditional display logic
   const schema = [
-    { name: 'presetType', type: 'select', label: 'Preset Type', options: ['plane','heli','car','boat','submarine'], required: true },
-    { name: 'landing_gear', type: 'checkbox', label: 'Landing Gear', default: false, showIf: types => ['plane','heli'].includes(types.presetType) },
-    { name: 'armor', type: 'number', label: 'Armor', default: 0, required: true },
+    { name: 'presetType', type: 'select', label: 'Preset Type', options: ['plane','heli','car','boat','submarine'], required: true, description: 'Determines what kind of stats the preset should have. Can determine if the preset is a plane or a boat for example' },
+    { name: 'is_craftable', type: 'checkbox', label: 'Is Craftable', default: false,description: 'This parameter lies and is only used by my automatic preset generator. It doesn\'t actually make a vehicle preset appear in the vehicle workbench. You need to add a recipe json file to the recipes data folder. See example preset recipe that comes with the mod', showIf: types => ['plane','heli'].includes(types.presetType) },
+
+    { name: 'item ', type: 'text', label: 'Item - Optional', default: '',description: 'dscombat:vehicle | Only change this if you make a mod that adds a new item that extends the ItemVehicle class!', required: false },
+    { name: 'display_name_base', type: 'text', label: 'Display Name Base', default: 'Alexis Plane',description: 'item.dscombat.assetId | Define a translation key that identifies this vehicle type without any preset desciptors. For example if displayName = Default Alexis Plane then display_name_base = Alexis Plane', required: true },
+    { name: 'landing_gear', type: 'checkbox', label: 'Landing Gear', default: false,description: 'Enable retractable landing gear (optional)', showIf: types => ['plane','heli'].includes(types.presetType) },
+    { name: 'health', type: 'number', label: 'Health', default: 0,description: 'The initial health a vehicle spawns with. Should be equal to max_health. Yes you need to define health and max_health separately. Must be positive!', required: true },
+    { name: 'armor', type: 'number', label: 'Armor', default: 0,description: 'The initial armor a vehicle spawns with. Should be equal to base_armor. Yes you need to define armor and base_armor separately. Must be positive!', required: true },
     // Common stats
-    { name: 'stats.max_health', type: 'number', label: 'Max Health', default: 10 },
-    { name: 'stats.max_speed', type: 'number', label: 'Max Speed', default: 0.1 },
-    { name: 'stats.mass', type: 'number', label: 'Mass', default: 1000 },
-    { name: 'stats.stealth', type: 'number', label: 'Stealth', default: 1 },
-    { name: 'stats.cross_sec_area', type: 'number', label: 'Cross Sectional Area', default: 10 },
-    { name: 'stats.idleheat', type: 'number', label: 'Idle Heat', default: 10 },
-    { name: 'stats.base_armor', type: 'number', label: 'Base Armor', default: 0 },
-    { name: 'stats.armor_damage_threshold', type: 'number', label: 'armor damage threshold', default: 0 },
-    { name: 'stats.armor_damage_absorbtion', type: 'number', label: 'Armor Damage Absorption', default: 0 },
-    { name: 'stats.max_altitude', type: 'number', label: 'Max Altitude', default: 330 },
-    { name: 'stats.throttleup', type: 'number', label: 'Throttle Up', default: 0.01 },
-    { name: 'stats.throttledown', type: 'number', label: 'Throttle Down', default: 0.01 },
-    { name: 'stats.negativeThrottle', type: 'boolean', label: 'Negative Throttle', default: false, showIf: types => ['car','boat','submarine'].includes(types.presetType) },
-    { name: 'stats.turn_radius', type: 'number', label: 'Turn Radius', default: 100 },
-    { name: 'stats.maxroll', type: 'number', label: 'Max Roll', default: 0 },
-    { name: 'stats.maxpitch', type: 'number', label: 'Max Pitch', default: 0 },
-    { name: 'stats.maxyaw', type: 'number', label: 'Max Yaw', default: 0 },
-    { name: 'stats.torqueroll', type: 'number', label: 'Torque Roll', default: 0, showIf: types => ['plane','boat'].includes(types.presetType) },
-    { name: 'stats.torquepitch', type: 'number', label: 'Torque Pitch', default: 0, showIf: types => ['plane','boat'].includes(types.presetType) },
-    { name: 'stats.torqueyaw', type: 'number', label: 'Torque Yaw', default: 0 , showIf: types => ['plane','boat'].includes(types.presetType)},
-    { name: 'stats.inertiaroll', type: 'number', label: 'Inertia Roll', default: 4 },
-    { name: 'stats.inertiapitch', type: 'number', label: 'Inertia Pitch', default: 4 },
-    { name: 'stats.inertiayaw', type: 'number', label: 'Inertia Yaw', default: 4 },
-    { name: 'stats.crashExplosionRadius', type: 'number', label: 'Crash Explosion Radius', default: 0 },
-    { name: 'stats.cameraDistance', type: 'number', label: 'Camera Distance', default: 4 },
-    //{ name: 'stats.mastType', type: 'ENUM', label: 'Camera Distance', default: 4 },
-    { name: 'stats.rootHitboxNoCollide', type: 'boolean', label: 'Root Hitbox No Collide', default: false },
-    { name: 'stats.entity_size_xz', type: 'number', label: 'Enity Size XZ', default: 4 },
-    { name: 'stats.entity_size_y', type: 'number', label: 'Enity Size y', default: 4 },
-    { name: 'stats.groundXTilt', type: 'number', label: 'Ground X Tilt', default: 0 },
-    //{ name: 'stats.hitboxes_control_pitch', type: 'number', label: 'Ground X Tilt', default: 0 },
-    //{ name: 'stats.hitboxes_control_yaw', type: 'number', label: 'Ground X Tilt', default: 0 },
-    //{ name: 'stats.hitboxes_control_roll', type: 'number', label: 'Ground X Tilt', default: 0 },
-    //{ name: 'stats.hitboxes_control_roll', type: 'number', label: 'Ground X Tilt', default: 0 },
-
-    { name: 'stats.plane.flapsAOABias', type: 'number', label: 'Flaps AOA Bias', default: 8, showIf: types => ['plane'].includes(types.presetType) },
-    { name: 'stats.plane.canAimDown', type: 'boolean', label: 'Can Aim Down', default: false, showIf: types => ['plane'].includes(types.presetType) },
-    { name: 'stats.plane.wing_area', type: 'number', label: 'Wing Area', default: 10, showIf: types => ['plane'].includes(types.presetType) },
-
+    { name: 'stats.max_health', type: 'number', label: 'Max Health',description: 'The maximum health this vehicle can have. Must be positive!', default: 10 },
+    { name: 'stats.max_speed', type: 'number', label: 'Max Speed',description: 'The maximum horizontal speed. Must be positive!', default: 0.1 },
+    { name: 'stats.mass', type: 'number', label: 'Mass',description: 'Determined the vehicles weight. Must be positive!', default: 1000 },
+    { name: 'stats.stealth', type: 'number', label: 'Stealth',description: 'A stealth value of 0 means the vehicle is invisible to radars. 1 means no stealth. Values greater than 1 make it easier for radars to see this vehicle. Values less than 1 make it harder for radars to see. Must be positive!', default: 1 },
+    { name: 'stats.cross_sec_area', type: 'number', label: 'Cross Sectional Area',description: 'Larger values mean more air resistance and make it easier for a radar to detect. Must be positive!', default: 10 },
+    { name: 'stats.idleheat', type: 'number', label: 'Idle Heat',description:'Heat determines how likely a heat seeking missile will target this vehicle. The larger the value, the more likely to be targeted. idleheat is the passive heat emission from the vehicle. Note the vehicle will get hotter when the engines are running. Must be positive!', default: 10 },
+    { name: 'stats.base_armor', type: 'number', label: 'Base Armor',description: 'The maximum armor this vehicle can have. Must be positive!', default: 0 },
+    { name: 'stats.armor_damage_threshold', type: 'number', label: 'armor damage threshold',description:'The minimum damage that must be inflicted on a vehicle with armor, before it starts taking damage. Must be positive!', default: 0 },
+    { name: 'stats.armor_damage_absorbtion', type: 'number', label: 'Armor Damage Absorption',description:'Must be a value between 0 and 1! The percentage of damage reduced from attacks when the vehicle has armor.', default: 0 },
+    { name: 'stats.max_altitude', type: 'number', label: 'Max Altitude',description: 'The maximum altitude a vehicle is allowed to reach. Note: altitude is distance from sea level. Sea level in the overworld is y = 70. So the default max y coordinate is 400.', default: 330 },
+    { name: 'stats.throttleup', type: 'number', label: 'Throttle Up',description:'Throttle is a number that can be between 0 and 1. This is the amount throttle increases per tick when the player inputs Throttle Increase. Must be positive!', default: 0.01 },
+    { name: 'stats.throttledown', type: 'number', label: 'Throttle Down',description:'Throttle is a number that can be between 0 and 1. This is the amount throttle decreases per tick when the player inputs Throttle Decrease. Must be positive!',default: 0.01 },
+    { name: 'stats.negativeThrottle', type: 'checkbox', label: 'Negative Throttle',description: 'If true, throttle can be between -1 and 1 allowing for backwards thrust. Used in cars, boats, and submarines. Should be kept as false in planes and helicopters.' ,default: false, showIf: types => ['car','boat','submarine'].includes(types.presetType) },
+    { name: 'stats.turn_radius', type: 'number', label: 'Turn Radius',description: 'The minimum turn radius when the vehicle drives on the ground. Must be positive!\n', default: 100 },
+    { name: 'stats.maxroll', type: 'number', label: 'Max Roll',description: 'The maximum change in roll that the vehicle can perform when the player inputs roll left or right in degrees per tick. Must be positive!', default: 0 },
+    { name: 'stats.maxpitch', type: 'number', label: 'Max Pitch',description:'The maximum change in pitch that the vehicle can perform when the player inputs pitch up or down in degrees per tick. Must be positive!', default: 0 },
+    { name: 'stats.maxyaw', type: 'number', label: 'Max Yaw', description: 'The maximum change in yaw that the vehicle can perform when the player inputs yaw left or right in degrees per tick. Must be positive!',default: 0 },
+    { name: 'stats.torqueroll', type: 'number', label: 'Torque Roll',description: 'Controls how quickly the vehicle can accelerate into its maximum roll rate. Used by aircraft and watercraft. Must be positive!', default: 0, showIf: types => ['plane','boat'].includes(types.presetType) },
+    { name: 'stats.torquepitch', type: 'number', label: 'Torque Pitch',description: 'Controls how quickly the vehicle can accelerate into its maximum pitch rate. Used by aircraft and watercraft. Must be positive!', default: 0, showIf: types => ['plane','boat'].includes(types.presetType) },
+    { name: 'stats.torqueyaw', type: 'number', label: 'Torque Yaw',description: 'Controls how quickly the vehicle can accelerate into its maximum yaw rate. Used by aircraft and watercraft. Must be positive!', default: 0 , showIf: types => ['plane','boat'].includes(types.presetType)},
+    { name: 'stats.inertiaroll', type: 'number', label: 'Inertia Roll',description: 'Controls how much "resistance" there is to turning on the roll axis. Must be greater than zero!', default: 4 },
+    { name: 'stats.inertiapitch', type: 'number', label: 'Inertia Pitch',description: 'Controls how much "resistance" there is to turning on the pitch axis. Must be greater than zero!', default: 4 },
+    { name: 'stats.inertiayaw', type: 'number', label: 'Inertia Yaw', description: 'Controls how much "resistance" there is to turning on the yaw axis. Must be greater than zero!',default: 4 },
+    { name: 'stats.crashExplosionRadius', type: 'number', label: 'Crash Explosion Radius',description:'The radius of an explosion if the vehicle crashes into an obstacle. If no explosion is wanted then keep it at zero.', default: 0 },
+    { name: 'stats.cameraDistance', type: 'number', label: 'Camera Distance',description:'The distance the pilots third person camera is from the player head. The vanilla/default distance is 4. Must be greater than zero!' ,default: 4 },
     {
       name: 'stats.mastType',
       type: 'select',
       label: 'Mast Type',
       options: ['NONE', 'THIN', 'NORMAL', 'LARGE'],
       default: 'NONE',
+      description: 'The kind of mast that external radars will sit on. Mostly used for boats',
       showIf: types => ['boat', 'submarine'].includes(types.presetType)
     },
+    { name: 'stats.rootHitboxNoCollide', type: 'checkbox', label: 'Root Hitbox No Collide',description:'If true, entities no longer collide with the main hitbox of the vehicle and players cant damage or interact with it either. Entities will only collide with the rotable hitboxes within hitboxes instead. Players can interact/right click the first hitbox in the hitboxes list. The root hitbox will still handle block collisions regardless. When you enable hitboxes (F3+B) the root hitbox is the white box, and the rotable hitboxes are the orange boxes.', default: false },
+    { name: 'stats.entity_size_xz', type: 'number', label: 'Enity Size XZ',description: 'The horizontal size of the root hitbox. Must be greater than zero!' ,default: 4 },
+    { name: 'stats.entity_size_y', type: 'number', label: 'Enity Size y',description:'The vertical size of the root hitbox. Must be greater than zero!', default: 4 },
+    { name: 'stats.groundXTilt', type: 'number', label: 'Ground X Tilt',description: 'The angle in degrees that the vehicle should tilt up when on the ground. Used in WW2 style planes where the nose points up while on the ground.', default: 0 },
+    //{ name: 'stats.hitboxes_control_pitch', type: 'number', label: 'Ground X Tilt', default: 0 },
+    //{ name: 'stats.hitboxes_control_yaw', type: 'number', label: 'Ground X Tilt', default: 0 },
+    //{ name: 'stats.hitboxes_control_roll', type: 'number', label: 'Ground X Tilt', default: 0 },
 
+    { name: 'stats.plane.flapsAOABias', type: 'number', label: 'Flaps AOA Bias', default: 8, showIf: types => ['plane'].includes(types.presetType) },
+    { name: 'stats.plane.canAimDown', type: 'checkbox', label: 'Can Aim Down', default: false, showIf: types => ['plane'].includes(types.presetType) },
+    { name: 'stats.plane.wing_area', type: 'number', label: 'Wing Area', default: 10, showIf: types => ['plane'].includes(types.presetType) },
+    { name: 'stats.plane.fuselage_lift_area', type: 'number', label: 'Fuselage Lift Area', default: 0, showIf: types => ['plane'].includes(types.presetType) },
+
+
+    { name: 'stats.heli.heliLiftFactor', type: 'number', label: 'Heli Lift Area',description: 'Make this value bigger if you want the helicopter to support more weight. Must be positive!', default: 1, showIf: types => ['heli'].includes(types.presetType) },
+    { name: 'stats.heli.alwaysLandingGear', type: 'checkbox', label: 'Always Landing Gear', description: 'If true, the helicopters landing gear is always active.',default: false, showIf: types => ['heli'].includes(types.presetType) },
+
+    { name: 'stats.car.isTank', type: 'checkbox', label: 'is Tank',description: 'If true, the vehicle will use tank drive physics instead of car drive physics.', default: false, showIf: types => ['car'].includes(types.presetType) },
 
   ];
 
   const form = document.getElementById('presetForm');
   const preview = document.getElementById('jsonPreview');
+  const searchBox = document.getElementById('searchBox');
 
-  // Build form with wrapper for panels
-  const fieldElems = [];
-  schema.forEach(field => {
+  function createField(field, parentPath = '') {
     const wrapper = document.createElement('div');
-    wrapper.dataset.name = field.name;
+    const fullName = parentPath ? `${parentPath}.${field.name}` : field.name;
+
+    if (field.group) {
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = field.label || field.group;
+      details.appendChild(summary);
+
+      if (field.description) details.title = field.description;
+
+      (field.children || []).forEach(child => {
+        details.appendChild(createField(child, parentPath ? `${parentPath}.${field.group}` : field.group));
+      });
+
+      details.dataset.name = fullName;
+      details.dataset.label = field.label?.toLowerCase() || '';
+      return details;
+    }
 
     const label = document.createElement('label');
-    label.textContent = field.label;
-    label.htmlFor = field.name;
+    label.htmlFor = fullName;
+    label.innerHTML = `${field.label}${!field.required ? ' <span class="optional">(optional)</span>' : ''}`;
+    if (field.description) label.title = field.description;
     wrapper.appendChild(label);
 
     let input;
@@ -100,39 +128,29 @@
       });
     } else {
       input = document.createElement('input');
-      input.type = field.type;
-      if (field.default !== undefined) input.value = field.default;
+      input.type = field.type === 'boolean' ? 'checkbox' : field.type;
+      if (field.default !== undefined) {
+        if (field.type === 'boolean') input.checked = field.default;
+        else input.value = field.default;
+      }
     }
-    input.id = field.name;
-    input.name = field.name;
+    input.name = fullName;
+    input.id = fullName;
     if (field.required) input.required = true;
-
-    wrapper.appendChild(input);
-    form.appendChild(wrapper);
-    fieldElems.push({ field, wrapper, input });
 
     input.addEventListener('input', () => {
       updatePreview();
       updateVisibility();
     });
-  });
 
-  // Show or hide fields based on presetType
-  function updateVisibility() {
-    const current = getFullFormData(); // use full data for logic
-    fieldElems.forEach(({ field, wrapper }) => {
-      if (field.showIf) {
-        wrapper.classList.toggle('hidden', !field.showIf(current));
-      } else {
-        wrapper.classList.remove('hidden');
-      }
-    });
-    updatePreview(); // Ensure preview updates when visibility changes
+    wrapper.appendChild(input);
+    wrapper.dataset.name = fullName;
+    wrapper.dataset.label = field.label?.toLowerCase() || '';
+    return wrapper;
   }
 
+  schema.forEach(field => form.appendChild(createField(field)));
 
-  // Serialize form to nested object
-  // Always grab all form values, even hidden ones
   function getFullFormData() {
     const data = {};
     new FormData(form).forEach((value, key) => {
@@ -148,80 +166,59 @@
     });
     return data;
   }
-
-  // Filter visible fields for JSON preview only
-  function formToObject() {
-    const fullData = getFullFormData();
-    const visibleKeys = new Set(
-            fieldElems
-                    .filter(({ wrapper }) => !wrapper.classList.contains('hidden'))
-                    .map(({ field }) => field.name)
-    );
-
-    const filteredData = {};
-
-    function copyVisible(source, target, path = '') {
-      for (const key in source) {
-        const fullPath = path ? `${path}.${key}` : key;
-        if (typeof source[key] === 'object' && source[key] !== null && !Array.isArray(source[key])) {
-          const subTarget = {};
-          copyVisible(source[key], subTarget, fullPath);
-          if (Object.keys(subTarget).length) {
-            target[key] = subTarget;
-          }
-        } else if (visibleKeys.has(fullPath)) {
-          target[key] = source[key];
-        }
-      }
-    }
-
-    copyVisible(fullData, filteredData);
-    return filteredData;
-  }
-
-
-
-  function updatePreview() {
-    preview.textContent = JSON.stringify(formToObject(), null, 2);
-  }
-
-  updatePreview();
-
-  // Download JSON
-  document.getElementById('downloadBtn').onclick = () => {
-    const jsonStr = preview.textContent;
-    const blob = new Blob([jsonStr], { type: 'application/json' });
+  document.getElementById('downloadBtn').addEventListener('click', () => {
+    const data = getFullFormData();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
+
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${form.presetType.value || 'preset'}.json`;
+    a.download = 'preset.json';
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  };
+  });
 
-  // Upload JSON
-  document.getElementById('uploadInput').onchange = e => {
-    const file = e.target.files[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const data = JSON.parse(reader.result);
-      Object.entries(flatten(data)).forEach(([key, val]) => {
-        const inp = form.querySelector(`[name='${key}']`);
-        if (inp) inp.value = val;
-      });
-      updatePreview(); updateVisibility();
-    };
-    reader.readAsText(file);
-  };
-
-  function flatten(obj, prefix = '', res = {}) {
-    for (const [k, v] of Object.entries(obj)) {
-      const pre = prefix ? `${prefix}.${k}` : k;
-      if (v && typeof v === 'object' && !Array.isArray(v)) flatten(v, pre, res);
-      else res[pre] = v;
-    }
-    return res;
+  function updateVisibility() {
+    const current = getFullFormData();
+    Array.from(form.querySelectorAll('[data-name]')).forEach(el => {
+      const field = findFieldByName(schema, el.dataset.name);
+      if (field?.showIf) {
+        el.classList.toggle('hidden', !field.showIf(current));
+      } else {
+        el.classList.remove('hidden');
+      }
+    });
   }
+
+  function findFieldByName(fields, name, prefix = '') {
+    for (const field of fields) {
+      const fullName = prefix ? `${prefix}.${field.name || field.group}` : (field.name || field.group);
+      if (fullName === name) return field;
+      if (field.children) {
+        const found = findFieldByName(field.children, name, fullName);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function updatePreview() {
+    preview.textContent = JSON.stringify(getFullFormData(), null, 2);
+  }
+
+  function updateSearch() {
+    const term = searchBox.value.toLowerCase();
+    Array.from(form.querySelectorAll('[data-label]')).forEach(el => {
+      el.classList.toggle('hidden', !el.dataset.label.includes(term));
+    });
+  }
+
+  searchBox.addEventListener('input', updateSearch);
+
+  updatePreview();
+  updateVisibility();
 </script>
 
 </body>
