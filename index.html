@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DSC Preset Builder</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    form div { margin-bottom: 1rem; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<h1>DiamondStarCombat Preset Builder</h1>
+
+<form id="presetForm"></form>
+
+<button id="downloadBtn" type="button">Download JSON</button>
+<input type="file" id="uploadInput" accept="application/json">
+<pre id="jsonPreview"></pre>
+
+<script>
+  // Schema with conditional display logic
+  const schema = [
+    { name: 'presetType', type: 'select', label: 'Preset Type', options: ['plane','heli','car','boat','submarine'], required: true },
+    { name: 'landing_gear', type: 'checkbox', label: 'Landing Gear', default: false, showIf: types => ['plane','heli'].includes(types.presetType) },
+    { name: 'armor', type: 'number', label: 'Armor', default: 0, required: true },
+    // Common stats
+    { name: 'stats.max_health', type: 'number', label: 'Max Health', default: 10 },
+    { name: 'stats.max_speed', type: 'number', label: 'Max Speed', default: 0.1 },
+    { name: 'stats.mass', type: 'number', label: 'Mass', default: 1000 },
+    { name: 'stats.stealth', type: 'number', label: 'Stealth', default: 1 },
+    { name: 'stats.cross_sec_area', type: 'number', label: 'Cross Sectional Area', default: 10 },
+    { name: 'stats.idleheat', type: 'number', label: 'Idle Heat', default: 10 },
+    { name: 'stats.base_armor', type: 'number', label: 'Base Armor', default: 0 },
+    { name: 'stats.armor_damage_threshold', type: 'number', label: 'armor damage threshold', default: 0 },
+    { name: 'stats.armor_damage_absorbtion', type: 'number', label: 'Armor Damage Absorption', default: 0 },
+    { name: 'stats.max_altitude', type: 'number', label: 'Max Altitude', default: 330 },
+    { name: 'stats.throttleup', type: 'number', label: 'Throttle Up', default: 0.01 },
+    { name: 'stats.throttledown', type: 'number', label: 'Throttle Down', default: 0.01 },
+    { name: 'stats.negativeThrottle', type: 'boolean', label: 'Negative Throttle', default: false, showIf: types => ['car','boat','submarine'].includes(types.presetType) },
+    { name: 'stats.turn_radius', type: 'number', label: 'Turn Radius', default: 100 },
+    { name: 'stats.maxroll', type: 'number', label: 'Max Roll', default: 0 },
+    { name: 'stats.maxpitch', type: 'number', label: 'Max Pitch', default: 0 },
+    { name: 'stats.maxyaw', type: 'number', label: 'Max Yaw', default: 0 },
+    { name: 'stats.torqueroll', type: 'number', label: 'Torque Roll', default: 0, showIf: types => ['plane','boat'].includes(types.presetType) },
+    { name: 'stats.torquepitch', type: 'number', label: 'Torque Pitch', default: 0, showIf: types => ['plane','boat'].includes(types.presetType) },
+    { name: 'stats.torqueyaw', type: 'number', label: 'Torque Yaw', default: 0 , showIf: types => ['plane','boat'].includes(types.presetType)},
+    { name: 'stats.inertiaroll', type: 'number', label: 'Inertia Roll', default: 4 },
+    { name: 'stats.inertiapitch', type: 'number', label: 'Inertia Pitch', default: 4 },
+    { name: 'stats.inertiayaw', type: 'number', label: 'Inertia Yaw', default: 4 },
+    { name: 'stats.crashExplosionRadius', type: 'number', label: 'Crash Explosion Radius', default: 0 },
+    { name: 'stats.cameraDistance', type: 'number', label: 'Camera Distance', default: 4 },
+    //{ name: 'stats.mastType', type: 'ENUM', label: 'Camera Distance', default: 4 },
+    { name: 'stats.rootHitboxNoCollide', type: 'boolean', label: 'Root Hitbox No Collide', default: false },
+    { name: 'stats.entity_size_xz', type: 'number', label: 'Enity Size XZ', default: 4 },
+    { name: 'stats.entity_size_y', type: 'number', label: 'Enity Size y', default: 4 },
+    { name: 'stats.groundXTilt', type: 'number', label: 'Ground X Tilt', default: 0 },
+    //{ name: 'stats.hitboxes_control_pitch', type: 'number', label: 'Ground X Tilt', default: 0 },
+    //{ name: 'stats.hitboxes_control_yaw', type: 'number', label: 'Ground X Tilt', default: 0 },
+    //{ name: 'stats.hitboxes_control_roll', type: 'number', label: 'Ground X Tilt', default: 0 },
+    //{ name: 'stats.hitboxes_control_roll', type: 'number', label: 'Ground X Tilt', default: 0 },
+
+    { name: 'stats.plane.flapsAOABias', type: 'number', label: 'Flaps AOA Bias', default: 8, showIf: types => ['plane'].includes(types.presetType) },
+    { name: 'stats.plane.canAimDown', type: 'boolean', label: 'Can Aim Down', default: false, showIf: types => ['plane'].includes(types.presetType) },
+    { name: 'stats.plane.wing_area', type: 'number', label: 'Wing Area', default: 10, showIf: types => ['plane'].includes(types.presetType) },
+
+    {
+      name: 'stats.mastType',
+      type: 'select',
+      label: 'Mast Type',
+      options: ['NONE', 'THIN', 'NORMAL', 'LARGE'],
+      default: 'NONE',
+      showIf: types => ['boat', 'submarine'].includes(types.presetType)
+    },
+
+
+  ];
+
+  const form = document.getElementById('presetForm');
+  const preview = document.getElementById('jsonPreview');
+
+  // Build form with wrapper for panels
+  const fieldElems = [];
+  schema.forEach(field => {
+    const wrapper = document.createElement('div');
+    wrapper.dataset.name = field.name;
+
+    const label = document.createElement('label');
+    label.textContent = field.label;
+    label.htmlFor = field.name;
+    wrapper.appendChild(label);
+
+    let input;
+    if (field.type === 'select') {
+      input = document.createElement('select');
+      field.options.forEach(opt => {
+        const o = document.createElement('option'); o.value = opt; o.text = opt;
+        input.appendChild(o);
+      });
+    } else {
+      input = document.createElement('input');
+      input.type = field.type;
+      if (field.default !== undefined) input.value = field.default;
+    }
+    input.id = field.name;
+    input.name = field.name;
+    if (field.required) input.required = true;
+
+    wrapper.appendChild(input);
+    form.appendChild(wrapper);
+    fieldElems.push({ field, wrapper, input });
+
+    input.addEventListener('input', () => {
+      updatePreview();
+      updateVisibility();
+    });
+  });
+
+  // Show or hide fields based on presetType
+  function updateVisibility() {
+    const current = getFullFormData(); // use full data for logic
+    fieldElems.forEach(({ field, wrapper }) => {
+      if (field.showIf) {
+        wrapper.classList.toggle('hidden', !field.showIf(current));
+      } else {
+        wrapper.classList.remove('hidden');
+      }
+    });
+    updatePreview(); // Ensure preview updates when visibility changes
+  }
+
+
+  // Serialize form to nested object
+  // Always grab all form values, even hidden ones
+  function getFullFormData() {
+    const data = {};
+    new FormData(form).forEach((value, key) => {
+      const keys = key.split('.');
+      keys.reduce((acc, k, idx) => {
+        if (idx === keys.length - 1) {
+          acc[k] = (value === 'on') ? true : (isNaN(value) ? value : Number(value));
+        } else {
+          acc[k] = acc[k] || {};
+        }
+        return acc[k];
+      }, data);
+    });
+    return data;
+  }
+
+  // Filter visible fields for JSON preview only
+  function formToObject() {
+    const fullData = getFullFormData();
+    const visibleKeys = new Set(
+            fieldElems
+                    .filter(({ wrapper }) => !wrapper.classList.contains('hidden'))
+                    .map(({ field }) => field.name)
+    );
+
+    const filteredData = {};
+
+    function copyVisible(source, target, path = '') {
+      for (const key in source) {
+        const fullPath = path ? `${path}.${key}` : key;
+        if (typeof source[key] === 'object' && source[key] !== null && !Array.isArray(source[key])) {
+          const subTarget = {};
+          copyVisible(source[key], subTarget, fullPath);
+          if (Object.keys(subTarget).length) {
+            target[key] = subTarget;
+          }
+        } else if (visibleKeys.has(fullPath)) {
+          target[key] = source[key];
+        }
+      }
+    }
+
+    copyVisible(fullData, filteredData);
+    return filteredData;
+  }
+
+
+
+  function updatePreview() {
+    preview.textContent = JSON.stringify(formToObject(), null, 2);
+  }
+
+  updatePreview();
+
+  // Download JSON
+  document.getElementById('downloadBtn').onclick = () => {
+    const jsonStr = preview.textContent;
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${form.presetType.value || 'preset'}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Upload JSON
+  document.getElementById('uploadInput').onchange = e => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const data = JSON.parse(reader.result);
+      Object.entries(flatten(data)).forEach(([key, val]) => {
+        const inp = form.querySelector(`[name='${key}']`);
+        if (inp) inp.value = val;
+      });
+      updatePreview(); updateVisibility();
+    };
+    reader.readAsText(file);
+  };
+
+  function flatten(obj, prefix = '', res = {}) {
+    for (const [k, v] of Object.entries(obj)) {
+      const pre = prefix ? `${prefix}.${k}` : k;
+      if (v && typeof v === 'object' && !Array.isArray(v)) flatten(v, pre, res);
+      else res[pre] = v;
+    }
+    return res;
+  }
+</script>
+
+</body>
+</html>
