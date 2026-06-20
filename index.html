@@ -17,7 +17,7 @@
   </nav>
   <div class="appbar-actions">
     <button type="button" id="themeToggle" class="ghost-btn" title="Toggle light / dark">◐ Theme</button>
-    <button type="button" id="telemetryToggle" class="primary-btn">JSON</button>
+    <button type="button" id="telemetryToggle" class="primary-btn">Import/Export</button>
   </div>
 </header>
 
@@ -44,6 +44,7 @@
         <button type="button" class="vtab-btn" data-vtab="vHitbox">Hitboxes</button>
         <button type="button" class="vtab-btn" data-vtab="vAero">Aero</button>
         <button type="button" class="vtab-btn" data-vtab="vPlace">Placement</button>
+        <button type="button" class="vtab-btn" data-vtab="vClient">Client</button>
       </div>
 
       <div class="viewer-tabcontent">
@@ -62,6 +63,7 @@
             <button type="button" id="centerXZ">Center XZ</button>
             <button type="button" id="dropFloor">Drop to floor</button>
           </div>
+          <p class="viewer-hint">Build the vehicle here; bundle and export it from the <strong>Export</strong> panel (top right).</p>
         </section>
 
         <section id="vHitbox" class="viewer-panel">
@@ -97,7 +99,51 @@
           <div id="slotList" class="placement-list"></div>
           <p class="viewer-hint">Click a marker (or ⌖) to move it with the gizmo. Positions are in vehicle space.</p>
         </section>
+
+        <section id="vClient" class="viewer-panel">
+          <h3>Display</h3>
+          <label class="detail-control">Display name
+            <input type="text" id="cDisplayName" placeholder="preset.dscombat.&lt;assetId&gt;">
+          </label>
+          <label class="detail-control">Inventory background
+            <input type="text" id="cInvBg" placeholder="dscombat:textures/ui/...">
+          </label>
+          <label class="checkbox-wrapper"><input type="checkbox" id="cDontCull"> Don't cull (render back faces)</label>
+
+          <h3>Model transform</h3>
+          <p class="viewer-hint">Render-only scale/rotation/translation → models/entity/&lt;id&gt;.json. Does not affect hitbox/slot coordinates.</p>
+          <label class="detail-control">Scale
+            <input type="number" id="tScale" step="any" value="1">
+          </label>
+          <div class="slot-pos">
+            <label class="slot-field">Scale X<input type="number" id="tScaleX" step="any" value="1"></label>
+            <label class="slot-field">Scale Y<input type="number" id="tScaleY" step="any" value="1"></label>
+            <label class="slot-field">Scale Z<input type="number" id="tScaleZ" step="any" value="1"></label>
+          </div>
+          <div class="slot-pos">
+            <label class="slot-field">Rot X<input type="number" id="tRotX" step="any" value="0"></label>
+            <label class="slot-field">Rot Y<input type="number" id="tRotY" step="any" value="0"></label>
+            <label class="slot-field">Rot Z<input type="number" id="tRotZ" step="any" value="0"></label>
+          </div>
+          <div class="slot-pos">
+            <label class="slot-field">Trans X<input type="number" id="tTransX" step="any" value="0"></label>
+            <label class="slot-field">Trans Y<input type="number" id="tTransY" step="any" value="0"></label>
+            <label class="slot-field">Trans Z<input type="number" id="tTransZ" step="any" value="0"></label>
+          </div>
+
+          <h3>Animations</h3>
+          <button type="button" id="addAnim" class="add-btn">+ Animation</button>
+          <div id="animList" class="placement-list"></div>
+
+          <h3>Inventory slots</h3>
+          <div class="origin-controls">
+            <button type="button" id="addSlotUI" class="add-btn">+ Slot position</button>
+            <button type="button" id="autoSlotUI" class="add-btn">Auto from slots</button>
+          </div>
+          <div id="slotUIList" class="placement-list"></div>
+        </section>
       </div>
+      <datalist id="partNames"></datalist>
 
       <div class="viewer-foot">
         <p id="viewerStatus" class="viewer-status"></p>
@@ -117,23 +163,52 @@
 
 <aside id="telemetry" class="telemetry">
   <div class="telemetry-head">
-    <span class="rail-eyebrow">preset.json</span>
+    <span class="rail-eyebrow">Export</span>
     <button type="button" id="telemetryClose" class="ghost-btn" title="Close">✕</button>
   </div>
-  <div class="telemetry-actions">
-    <button type="button" id="downloadBtn" class="primary-btn">Download</button>
-    <label for="uploadInput" class="file-input-label">Upload</label>
-    <input type="file" id="uploadInput" accept="application/json">
-    <button type="button" id="copyBtn" class="ghost-btn">Copy</button>
+  <div class="export-body">
+    <h3>Preset JSON</h3>
+    <div class="export-row">
+      <button type="button" id="downloadBtn" class="primary-btn">Download JSON</button>
+      <label for="uploadInput" class="file-input-label">Upload JSON</label>
+      <input type="file" id="uploadInput" accept="application/json">
+      <button type="button" id="copyBtn" class="ghost-btn">Copy</button>
+    </div>
+    <pre id="jsonPreview"></pre>
+
+    <h3>Addon (.zip)</h3>
+    <label class="detail-control">Pack id (presetId)
+      <input type="text" id="packName" placeholder="my_vehicle">
+    </label>
+    <label class="detail-control">pack_format
+      <input type="number" id="packFormat" value="15" min="1" step="1">
+    </label>
+    <div class="export-row">
+      <button type="button" id="packBtn" class="primary-btn">Download this vehicle (.zip)</button>
+      <button type="button" id="newVehicleBtn" class="add-btn">New vehicle</button>
+    </div>
+
+    <h3>Pack (multiple vehicles)</h3>
+    <button type="button" id="addToPackBtn" class="add-btn">Add this vehicle to pack</button>
+    <div id="packList" class="placement-list"></div>
+    <label class="detail-control">Pack name
+      <input type="text" id="packZipName" value="my_pack">
+    </label>
+    <div class="export-row">
+      <button type="button" id="downloadPackBtn" class="primary-btn">Download pack (.zip)</button>
+      <label for="importPackInput" class="file-input-label">Import pack (.zip)</label>
+      <input type="file" id="importPackInput" accept=".zip,application/zip">
+    </div>
+    <p class="viewer-hint">Import an addon/pack zip to load its vehicles here, then click a vehicle to edit it.</p>
   </div>
-  <pre id="jsonPreview"></pre>
 </aside>
 
 <script type="importmap">
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm"
   }
 }
 </script>
@@ -166,7 +241,14 @@
   });
 
   const telemetry = document.getElementById('telemetry');
-  document.getElementById('telemetryToggle').addEventListener('click', () => telemetry.classList.toggle('open'));
+  document.getElementById('telemetryToggle').addEventListener('click', () => {
+    telemetry.classList.toggle('open');
+    const pn = document.getElementById('packName');
+    if (pn && !pn.value && window.PresetForm) {
+      const d = window.PresetForm.getData();
+      pn.value = d.presetId || (d.stats && d.stats.assetId) || '';
+    }
+  });
   document.getElementById('telemetryClose').addEventListener('click', () => telemetry.classList.remove('open'));
   document.getElementById('copyBtn').addEventListener('click', async () => {
     const text = document.getElementById('jsonPreview').textContent;

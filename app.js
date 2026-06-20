@@ -402,7 +402,7 @@
     updatePreview();
   }
 
-  window.PresetForm = { applyPartial, getData: () => buildData() };
+  window.PresetForm = { applyPartial, getData: () => buildData(), loadData: loadFormData };
 
   activateSection(sections[0]);
   updatePreview();

@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import JSZip from 'jszip';
 
 const G = window.Generate;
 const statusEl = document.getElementById('viewerStatus');
@@ -115,6 +116,8 @@ function onGizmoChange() {
 let pendingMaterials = null;
 let pendingTextureURL = null;
 let objText = null;
+let mtlText = null;
+let textureFile = null;
 
 document.getElementById('objInput').addEventListener('change', e => {
   const file = e.target.files[0];
@@ -126,6 +129,7 @@ document.getElementById('mtlInput').addEventListener('change', e => {
   const file = e.target.files[0];
   if (!file) return;
   file.text().then(txt => {
+    mtlText = txt;
     const mtl = new MTLLoader().parse(txt, '');
     mtl.preload();
     pendingMaterials = mtl;
@@ -137,6 +141,7 @@ document.getElementById('mtlInput').addEventListener('change', e => {
 document.getElementById('texInput').addEventListener('change', e => {
   const file = e.target.files[0];
   if (!file) return;
+  textureFile = file;
   pendingTextureURL = URL.createObjectURL(file);
   if (modelGroup) { applyTexture(modelGroup, pendingTextureURL); setStatus('Texture applied.'); }
   else setStatus('Texture ready — it will apply when you load the .obj.');
@@ -189,7 +194,19 @@ function buildModel(preserveState) {
   offset = prevOffset || { x: 0, y: 0, z: 0 };
   if (!preserveState) frameCamera();
   renderPartsList();
+  updatePartDatalist();
   regenerate();
+}
+
+function updatePartDatalist() {
+  const dl = document.getElementById('partNames');
+  if (!dl) return;
+  dl.innerHTML = '';
+  parts.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.name;
+    dl.appendChild(o);
+  });
 }
 
 function extractParts(group) {
@@ -494,7 +511,15 @@ document.getElementById('showHitboxes').addEventListener('change', e => {
 });
 document.getElementById('addSmoke').addEventListener('click', addSmoke);
 document.getElementById('addSlot').addEventListener('click', addSlot);
-window.addEventListener('tabchange', e => { if (e.detail === 'viewerTab') refreshPlacementVisibility(); });
+window.addEventListener('tabchange', e => {
+  if (e.detail !== 'viewerTab') return;
+  refreshPlacementVisibility();
+  const pn = document.getElementById('packName');
+  if (pn && !pn.value && window.PresetForm) {
+    const d = window.PresetForm.getData();
+    pn.value = d.presetId || (d.stats && d.stats.assetId) || '';
+  }
+});
 refreshPlacementVisibility();
 assembleOutput();
 
@@ -503,4 +528,433 @@ document.getElementById('applyBtn').addEventListener('click', () => {
   if (!Object.keys(output).length) { setStatus('Nothing to apply yet — load a model or add slots / smoke.'); return; }
   window.PresetForm.applyPartial(output);
   setStatus('Applied to preset. Switch to the Form tab to review.');
+});
+
+function sanitizeId(s) {
+  return (s || '').toString().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+const ANIM_TYPES = {
+  motor_rotation: ['pivot', 'rot_axis', 'rot_rate'],
+  wheel_rotation: ['pivot', 'rot_axis', 'rot_rate'],
+  continuous_rotation: ['pivot', 'rot_axis', 'rot_rate'],
+  spinning_radar: ['pivot', 'rot_axis', 'rot_rate', 'radar_id'],
+  input_bound_rotation: ['pivot', 'rot_axis', 'input_axis', 'bound'],
+  plane_flap_rotation: ['pivot', 'rot_axis', 'input_axis', 'bound'],
+  landing_gear: ['pivot', 'rot_axis', 'fold_angle'],
+  input_bound_translation: ['bounds', 'input_axis'],
+  hitbox_destroy_part: ['hitbox_name'],
+  always_hide: [],
+};
+const ROT_AXES = ['X', 'Y', 'Z'];
+const INPUT_AXES = ['PITCH', 'YAW', 'ROLL', 'THROTTLE'];
+const anims = [];
+const slotUIs = [];
+const roundVec = v => ({ x: G.round3(Number(v.x) || 0), y: G.round3(Number(v.y) || 0), z: G.round3(Number(v.z) || 0) });
+
+function newAnimItem() {
+  return {
+    model_part_key: '', anim_id: 'motor_rotation',
+    pivot: { x: 0, y: 0, z: 0 }, bounds: { x: 0, y: 0, z: 0 },
+    rot_axis: 'Y', input_axis: 'PITCH',
+    rot_rate: 30, bound: 20, fold_angle: 90, radar_id: '', hitbox_name: '',
+  };
+}
+
+function partKeyInput(value, on) {
+  const i = elm('input');
+  i.type = 'text';
+  i.setAttribute('list', 'partNames');
+  i.value = value || '';
+  i.addEventListener('input', () => on(i.value));
+  return i;
+}
+
+function vec3Fields(label, vec) {
+  const wrap = elm('div', 'slot-pos');
+  ['x', 'y', 'z'].forEach(ax => wrap.appendChild(fieldRow(`${label} ${ax.toUpperCase()}`, numField(vec[ax], v => { vec[ax] = v; }))));
+  return wrap;
+}
+
+function renderAnimFields(host, it) {
+  host.innerHTML = '';
+  (ANIM_TYPES[it.anim_id] || []).forEach(f => {
+    if (f === 'pivot') host.appendChild(vec3Fields('Pivot', it.pivot));
+    else if (f === 'bounds') host.appendChild(vec3Fields('Bounds', it.bounds));
+    else if (f === 'rot_axis') host.appendChild(fieldRow('Rot axis', selField(ROT_AXES, it.rot_axis, v => { it.rot_axis = v; })));
+    else if (f === 'input_axis') host.appendChild(fieldRow('Input axis', selField(INPUT_AXES, it.input_axis, v => { it.input_axis = v; })));
+    else if (f === 'rot_rate') host.appendChild(fieldRow('Rot rate (deg/tick)', numField(it.rot_rate, v => { it.rot_rate = v; })));
+    else if (f === 'bound') host.appendChild(fieldRow('Bound (deg)', numField(it.bound, v => { it.bound = v; })));
+    else if (f === 'fold_angle') host.appendChild(fieldRow('Fold angle (deg)', numField(it.fold_angle, v => { it.fold_angle = v; })));
+    else if (f === 'radar_id') host.appendChild(fieldRow('Radar id', txtField(it.radar_id, v => { it.radar_id = v; })));
+    else if (f === 'hitbox_name') host.appendChild(fieldRow('Hitbox name', txtField(it.hitbox_name, v => { it.hitbox_name = v; })));
+  });
+}
+
+function addAnim(initial) {
+  const it = initial || newAnimItem();
+  const entry = { item: it };
+  anims.push(entry);
+
+  const card = elm('div', 'slot-card');
+  const head = elm('div', 'slot-head');
+  head.appendChild(document.createTextNode(`Anim ${anims.length}`));
+  const actions = elm('div', 'row-actions');
+  actions.appendChild(iconBtn('✕', 'Remove', () => { anims.splice(anims.indexOf(entry), 1); card.remove(); }));
+  head.appendChild(actions);
+  card.appendChild(head);
+
+  card.appendChild(fieldRow('Model part', partKeyInput(it.model_part_key, v => { it.model_part_key = v; })));
+  const host = elm('div');
+  const typeSel = selField(Object.keys(ANIM_TYPES), it.anim_id, v => { it.anim_id = v; renderAnimFields(host, it); });
+  card.appendChild(fieldRow('Type', typeSel));
+  card.appendChild(host);
+  renderAnimFields(host, it);
+
+  document.getElementById('animList').appendChild(card);
+}
+
+function addSlotUI(name, x, y) {
+  const it = { slot_name: name || '', x: x || 0, y: y || 0 };
+  const entry = { item: it };
+  slotUIs.push(entry);
+  const row = elm('div', 'slot-card');
+  const head = elm('div', 'slot-head');
+  head.appendChild(document.createTextNode('Slot UI'));
+  const actions = elm('div', 'row-actions');
+  actions.appendChild(iconBtn('✕', 'Remove', () => { slotUIs.splice(slotUIs.indexOf(entry), 1); row.remove(); }));
+  head.appendChild(actions);
+  row.appendChild(head);
+  row.appendChild(fieldRow('Slot name', txtField(it.slot_name, v => { it.slot_name = v; })));
+  const pos = elm('div', 'slot-pos');
+  pos.append(fieldRow('UI X', numField(it.x, v => { it.x = v; })), fieldRow('UI Y', numField(it.y, v => { it.y = v; })));
+  row.appendChild(pos);
+  document.getElementById('slotUIList').appendChild(row);
+}
+
+function autoSlotUI() {
+  const data = window.PresetForm ? window.PresetForm.getData() : {};
+  const names = (data.slots || []).map(s => s.name).filter(Boolean);
+  names.forEach((name, i) => addSlotUI(name, 8 + (i % 9) * 18, 18 + Math.floor(i / 9) * 18));
+}
+
+function animToJson(it) {
+  const o = { anim_id: it.anim_id, model_part_key: it.model_part_key };
+  (ANIM_TYPES[it.anim_id] || []).forEach(f => {
+    if (f === 'pivot') o.pivot = roundVec(it.pivot);
+    else if (f === 'bounds') o.bounds = roundVec(it.bounds);
+    else if (f === 'rot_axis') o.rot_axis = it.rot_axis;
+    else if (f === 'input_axis') o.input_axis = it.input_axis;
+    else if (f === 'rot_rate') o.rot_rate = Number(it.rot_rate) || 0;
+    else if (f === 'bound') o.bound = Number(it.bound) || 0;
+    else if (f === 'fold_angle') o.fold_angle = Number(it.fold_angle) || 0;
+    else if (f === 'radar_id') o.radar_id = it.radar_id;
+    else if (f === 'hitbox_name') o.hitbox_name = it.hitbox_name;
+  });
+  return o;
+}
+
+function vehicleClientJson(assetId) {
+  const md = { model_id: assetId };
+  if (document.getElementById('cDontCull').checked) md.dont_cull = true;
+  const ca = anims.filter(e => e.item.model_part_key).map(e => animToJson(e.item));
+  if (ca.length) md.custom_anims = ca;
+  const out = {
+    presetId: assetId,
+    presetType: 'standard',
+    displayName: document.getElementById('cDisplayName').value.trim() || `preset.dscombat.${assetId}`,
+    model_data: md,
+  };
+  const bg = document.getElementById('cInvBg').value.trim();
+  if (bg) out.inventory_background = bg;
+  const sui = slotUIs.filter(e => e.item.slot_name).map(e => ({
+    slot_name: e.item.slot_name,
+    slot_ui_x: Math.round(Number(e.item.x) || 0),
+    slot_ui_y: Math.round(Number(e.item.y) || 0),
+  }));
+  if (sui.length) out.inventory_slots_pos = sui;
+  return out;
+}
+
+function modelTransformJson() {
+  const ids = {
+    scale: 'tScale', scalex: 'tScaleX', scaley: 'tScaleY', scalez: 'tScaleZ',
+    rotationx: 'tRotX', rotationy: 'tRotY', rotationz: 'tRotZ',
+    translatex: 'tTransX', translatey: 'tTransY', translatez: 'tTransZ',
+  };
+  const defaults = { scale: 1, scalex: 1, scaley: 1, scalez: 1, rotationx: 0, rotationy: 0, rotationz: 0, translatex: 0, translatey: 0, translatez: 0 };
+  const o = {};
+  for (const [key, id] of Object.entries(ids)) {
+    const v = Number(document.getElementById(id).value);
+    if (!Number.isNaN(v) && v !== defaults[key]) o[key] = v;
+  }
+  return o;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function texturePng(file) {
+  if (file.type === 'image/png' || /\.png$/i.test(file.name)) return file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      c.toBlob(b => (b ? resolve(b.arrayBuffer()) : reject(new Error('convert failed'))), 'image/png');
+    };
+    img.onerror = () => reject(new Error('image load failed'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+const pack = [];
+
+function packMetaFile(name, format) {
+  return JSON.stringify({ pack: { pack_format: format, description: `${name} — DiamondStarCombat addon` } }, null, 2);
+}
+
+async function collectVehicleFiles() {
+  const data = window.PresetForm.getData();
+  const presetId = sanitizeId(document.getElementById('packName').value)
+    || sanitizeId(data.presetId)
+    || sanitizeId(data.stats && data.stats.assetId)
+    || 'my_vehicle';
+  const assetId = sanitizeId(data.stats && data.stats.assetId) || presetId;
+  data.presetId = presetId;
+
+  const files = {};
+  files[`data/dscombat/vehicle/${presetId}.json`] = JSON.stringify(data, null, 2);
+  files[`assets/dscombat/vehicle_client/${assetId}.json`] = JSON.stringify(vehicleClientJson(assetId), null, 2);
+  if (objText) files[`assets/dscombat/models/entity/${assetId}.obj`] = objText;
+  if (mtlText) files[`assets/dscombat/models/entity/${assetId}.mtl`] = mtlText;
+  const transform = modelTransformJson();
+  if (Object.keys(transform).length) files[`assets/dscombat/models/entity/${assetId}.json`] = JSON.stringify(transform, null, 2);
+  if (textureFile) {
+    try {
+      files[`assets/dscombat/textures/entity/vehicle/${assetId}/base0.png`] = await texturePng(textureFile);
+    } catch {
+      setStatus('Texture could not be converted to PNG; packed without it.');
+    }
+  }
+  return { presetId, files };
+}
+
+async function downloadSingle() {
+  if (!window.PresetForm) { setStatus('Form not ready.'); return; }
+  const v = await collectVehicleFiles();
+  const format = parseInt(document.getElementById('packFormat').value, 10) || 15;
+  const zip = new JSZip();
+  zip.file('pack.mcmeta', packMetaFile(v.presetId, format));
+  for (const [p, c] of Object.entries(v.files)) zip.file(p, c);
+  downloadBlob(await zip.generateAsync({ type: 'blob' }), `${v.presetId}.zip`);
+  setStatus(`Packed ${v.presetId}.zip`);
+}
+
+async function addToPack() {
+  if (!window.PresetForm) { setStatus('Form not ready.'); return; }
+  const v = await collectVehicleFiles();
+  const idx = pack.findIndex(e => e.presetId === v.presetId);
+  if (idx >= 0) pack[idx] = v; else pack.push(v);
+  renderPackList();
+  setStatus(`${v.presetId} ${idx >= 0 ? 'updated in' : 'added to'} pack (${pack.length} vehicle${pack.length === 1 ? '' : 's'}).`);
+}
+
+function renderPackList() {
+  const list = document.getElementById('packList');
+  list.innerHTML = '';
+  pack.forEach(v => {
+    const row = elm('div', 'smoke-row');
+    row.appendChild(document.createTextNode(v.presetId));
+    const actions = elm('div', 'row-actions');
+    actions.appendChild(iconBtn('✎', 'Load to edit', () => loadVehicleEntry(v)));
+    actions.appendChild(iconBtn('✕', 'Remove', () => { pack.splice(pack.indexOf(v), 1); renderPackList(); }));
+    row.appendChild(actions);
+    list.appendChild(row);
+  });
+}
+
+async function downloadPack() {
+  if (!pack.length) { setStatus('Pack is empty — add a vehicle first.'); return; }
+  const format = parseInt(document.getElementById('packFormat').value, 10) || 15;
+  const name = sanitizeId(document.getElementById('packZipName').value) || 'my_pack';
+  const zip = new JSZip();
+  zip.file('pack.mcmeta', packMetaFile(name, format));
+  for (const v of pack) for (const [p, c] of Object.entries(v.files)) zip.file(p, c);
+  downloadBlob(await zip.generateAsync({ type: 'blob' }), `${name}.zip`);
+  setStatus(`Packed ${name}.zip with ${pack.length} vehicle${pack.length === 1 ? '' : 's'}.`);
+}
+
+function clearViewer() {
+  if (modelGroup) { scene.remove(modelGroup); modelGroup = null; }
+  parts = [];
+  partState.clear();
+  updatePartDatalist();
+  boxGroup.clear();
+  placementGroup.clear();
+  transform.detach();
+  selected = null;
+  smokes.length = 0;
+  slots.length = 0;
+  anims.length = 0;
+  slotUIs.length = 0;
+  ['smokeList', 'slotList', 'animList', 'slotUIList'].forEach(id => { document.getElementById(id).innerHTML = ''; });
+  ['objInput', 'mtlInput', 'texInput'].forEach(id => { document.getElementById(id).value = ''; });
+  objText = null;
+  mtlText = null;
+  textureFile = null;
+  pendingMaterials = null;
+  pendingTextureURL = null;
+  generated = { hitboxes: [], stats: {} };
+  output = {};
+  document.getElementById('genPreview').textContent = '{}';
+  document.getElementById('aeroSummary').textContent = '';
+  ['tScale', 'tScaleX', 'tScaleY', 'tScaleZ'].forEach(id => { document.getElementById(id).value = '1'; });
+  ['tRotX', 'tRotY', 'tRotZ', 'tTransX', 'tTransY', 'tTransZ'].forEach(id => { document.getElementById(id).value = '0'; });
+  document.getElementById('cDisplayName').value = '';
+  document.getElementById('cInvBg').value = '';
+  document.getElementById('cDontCull').checked = false;
+  document.getElementById('packName').value = '';
+  setStatus('Cleared — load the next vehicle\'s model.');
+}
+
+function animItemFromJson(a) {
+  const it = newAnimItem();
+  it.anim_id = a.anim_id || 'motor_rotation';
+  it.model_part_key = a.model_part_key || '';
+  if (a.pivot) it.pivot = { x: +a.pivot.x || 0, y: +a.pivot.y || 0, z: +a.pivot.z || 0 };
+  if (a.bounds) it.bounds = { x: +a.bounds.x || 0, y: +a.bounds.y || 0, z: +a.bounds.z || 0 };
+  if (a.rot_axis) it.rot_axis = a.rot_axis;
+  if (a.input_axis) it.input_axis = a.input_axis;
+  if ('rot_rate' in a) it.rot_rate = a.rot_rate;
+  if ('bound' in a) it.bound = a.bound;
+  if ('fold_angle' in a) it.fold_angle = a.fold_angle;
+  if (a.radar_id) it.radar_id = a.radar_id;
+  if (a.hitbox_name) it.hitbox_name = a.hitbox_name;
+  return it;
+}
+
+function restoreClient(vc) {
+  document.getElementById('cDisplayName').value = vc.displayName || '';
+  document.getElementById('cInvBg').value = vc.inventory_background || '';
+  const md = vc.model_data || {};
+  document.getElementById('cDontCull').checked = !!md.dont_cull;
+  anims.length = 0;
+  document.getElementById('animList').innerHTML = '';
+  (md.custom_anims || []).forEach(a => addAnim(animItemFromJson(a)));
+  slotUIs.length = 0;
+  document.getElementById('slotUIList').innerHTML = '';
+  (vc.inventory_slots_pos || []).forEach(s => addSlotUI(s.slot_name, s.slot_ui_x, s.slot_ui_y));
+}
+
+function restoreTransform(tr) {
+  tr = tr || {};
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  set('tScale', tr.scale ?? 1); set('tScaleX', tr.scalex ?? 1); set('tScaleY', tr.scaley ?? 1); set('tScaleZ', tr.scalez ?? 1);
+  set('tRotX', tr.rotationx ?? 0); set('tRotY', tr.rotationy ?? 0); set('tRotZ', tr.rotationz ?? 0);
+  set('tTransX', tr.translatex ?? 0); set('tTransY', tr.translatey ?? 0); set('tTransZ', tr.translatez ?? 0);
+}
+
+function loadVehicleEntry(entry) {
+  const files = entry.files;
+  const presetPath = Object.keys(files).find(p => /^data\/dscombat\/vehicle\/.+\.json$/.test(p));
+  let preset = {};
+  if (presetPath) { try { preset = JSON.parse(files[presetPath]); } catch {} }
+  if (window.PresetForm) window.PresetForm.loadData(preset);
+
+  const vcPath = Object.keys(files).find(p => /vehicle_client\/.+\.json$/.test(p));
+  const assetId = vcPath
+    ? vcPath.replace(/.*vehicle_client\//, '').replace(/\.json$/, '')
+    : (sanitizeId(preset.stats && preset.stats.assetId) || entry.presetId);
+
+  if (modelGroup) { scene.remove(modelGroup); modelGroup = null; }
+  parts = [];
+  partState.clear();
+  updatePartDatalist();
+  boxGroup.clear();
+  placementGroup.clear();
+  transform.detach();
+  selected = null;
+  smokes.length = 0;
+  slots.length = 0;
+  document.getElementById('smokeList').innerHTML = '';
+  document.getElementById('slotList').innerHTML = '';
+
+  objText = files[`assets/dscombat/models/entity/${assetId}.obj`] || null;
+  mtlText = files[`assets/dscombat/models/entity/${assetId}.mtl`] || null;
+  pendingMaterials = null;
+  if (mtlText) { const m = new MTLLoader().parse(mtlText, ''); m.preload(); pendingMaterials = m; }
+  const texBuf = files[`assets/dscombat/textures/entity/vehicle/${assetId}/base0.png`];
+  if (texBuf) { textureFile = new File([texBuf], 'base0.png', { type: 'image/png' }); pendingTextureURL = URL.createObjectURL(textureFile); }
+  else { textureFile = null; pendingTextureURL = null; }
+
+  if (vcPath) { try { restoreClient(JSON.parse(files[vcPath])); } catch {} }
+  restoreTransform(files[`assets/dscombat/models/entity/${assetId}.json`] ? JSON.parse(files[`assets/dscombat/models/entity/${assetId}.json`]) : {});
+  document.getElementById('packName').value = entry.presetId;
+
+  if (objText) {
+    buildModel(false);
+  } else {
+    generated = { hitboxes: [], stats: {} };
+    output = {};
+    document.getElementById('genPreview').textContent = '{}';
+    document.getElementById('aeroSummary').textContent = '';
+  }
+  setStatus(`Loaded ${entry.presetId} for editing.`);
+}
+
+async function importPack(file) {
+  let zip;
+  try { zip = await JSZip.loadAsync(file); } catch { setStatus('Could not read the zip.'); return; }
+  const all = {};
+  await Promise.all(Object.keys(zip.files).filter(p => !zip.files[p].dir).map(async p => {
+    all[p] = /\.(json|obj|mtl)$/i.test(p) ? await zip.files[p].async('string') : await zip.files[p].async('arraybuffer');
+  }));
+  const presetPaths = Object.keys(all).filter(p => /^data\/dscombat\/vehicle\/.+\.json$/.test(p));
+  if (!presetPaths.length) { setStatus('No vehicle presets found in the zip.'); return; }
+  let firstEntry = null;
+  presetPaths.forEach(pp => {
+    const presetId = pp.replace(/.*vehicle\//, '').replace(/\.json$/, '');
+    let preset;
+    try { preset = JSON.parse(all[pp]); } catch { return; }
+    const assetId = sanitizeId(preset.stats && preset.stats.assetId) || presetId;
+    const files = { [pp]: all[pp] };
+    [
+      `assets/dscombat/vehicle_client/${assetId}.json`,
+      `assets/dscombat/models/entity/${assetId}.obj`,
+      `assets/dscombat/models/entity/${assetId}.mtl`,
+      `assets/dscombat/models/entity/${assetId}.json`,
+      `assets/dscombat/textures/entity/vehicle/${assetId}/base0.png`,
+    ].forEach(ap => { if (all[ap] !== undefined) files[ap] = all[ap]; });
+    const entry = { presetId, files };
+    const idx = pack.findIndex(e => e.presetId === presetId);
+    if (idx >= 0) pack[idx] = entry; else pack.push(entry);
+    if (!firstEntry) firstEntry = entry;
+  });
+  renderPackList();
+  if (firstEntry) loadVehicleEntry(firstEntry);
+  setStatus(`Imported ${presetPaths.length} vehicle(s).`);
+}
+
+document.getElementById('addAnim').addEventListener('click', () => addAnim());
+document.getElementById('addSlotUI').addEventListener('click', () => addSlotUI());
+document.getElementById('autoSlotUI').addEventListener('click', autoSlotUI);
+document.getElementById('packBtn').addEventListener('click', () => { downloadSingle(); });
+document.getElementById('newVehicleBtn').addEventListener('click', clearViewer);
+document.getElementById('addToPackBtn').addEventListener('click', () => { addToPack(); });
+document.getElementById('downloadPackBtn').addEventListener('click', () => { downloadPack(); });
+document.getElementById('importPackInput').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (f) importPack(f);
+  e.target.value = '';
 });
